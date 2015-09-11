@@ -22,11 +22,12 @@ class AccountStorage(object):
 
     def get_partial_digest(self, username):
         cursor = connection.cursor()
-        cursor.execute(self.GET_PARTIAL_DIGEST_QUERY, [username])
-        # In MySQL, string comparison is case-insensitive by default.
-        # Therefore a second round of filtering is required.
-        row = [(row[1]) for row in cursor.fetchall() if row[0] == username]
-        transaction.commit_unless_managed()
+        with transaction.atomic():
+            cursor.execute(self.GET_PARTIAL_DIGEST_QUERY, [username])
+            # In MySQL, string comparison is case-insensitive by default.
+            # Therefore a second round of filtering is required.
+            row = [(row[1]) for row in cursor.fetchall() if row[0] == username]
+
         if not row:
             return None
         return row[0]
@@ -78,31 +79,35 @@ class NonceStorage(object):
 
     def _expire_nonces_for_user(self, user):
         cursor = connection.cursor()
-        cursor.execute(self.DELETE_OLDER_THAN_QUERY, [user.id])
-        row = cursor.fetchone()
-        transaction.commit_unless_managed()
+        with transaction.atomic():
+            cursor.execute(self.DELETE_OLDER_THAN_QUERY, [user.id])
+            row = cursor.fetchone()
+
         if not row:
             return
         delete_older_than = row[0]
-        cursor.execute(self.DELETE_EXPIRED_NONCES_QUERY, [delete_older_than])
-        transaction.commit_unless_managed()
+        with transaction.atomic():
+            cursor.execute(self.DELETE_EXPIRED_NONCES_QUERY, [delete_older_than])
+
 
     def update_existing_nonce(self, user, nonce, nonce_count):
         cursor = connection.cursor()
-        if nonce_count == None:
-            cursor.execute(
-                self.UPDATE_EXISTING_NONCE_WITHOUT_COUNT_QUERY,
-                [connection.ops.value_to_db_datetime(datetime.now()),
-                 nonce, user.id]
-            )
-        else:
-            cursor.execute(
-                self.UPDATE_EXISTING_NONCE_WITH_COUNT_QUERY,
-                [nonce_count,
-                 connection.ops.value_to_db_datetime(datetime.now()),
-                 nonce, user.id, nonce_count]
-            )
-        transaction.commit_unless_managed()
+
+        with transaction.atomic():
+            if nonce_count == None:
+                cursor.execute(
+                    self.UPDATE_EXISTING_NONCE_WITHOUT_COUNT_QUERY,
+                    [connection.ops.value_to_db_datetime(datetime.now()),
+                     nonce, user.id]
+                )
+            else:
+                cursor.execute(
+                    self.UPDATE_EXISTING_NONCE_WITH_COUNT_QUERY,
+                    [nonce_count,
+                     connection.ops.value_to_db_datetime(datetime.now()),
+                     nonce, user.id, nonce_count]
+                )
+
         # if no rows are updated, either the nonce isn't in the DB,
         # it's for a different user, or the count is bad
         return cursor.rowcount == 1
@@ -110,14 +115,13 @@ class NonceStorage(object):
     def store_nonce(self, user, nonce, nonce_count):
         self._expire_nonces_for_user(user)
         cursor = connection.cursor()
-        try:
-            cursor.execute(
-                self.INSERT_NONCE_QUERY,
-                [user.id, nonce, nonce_count,
-                 connection.ops.value_to_db_datetime(datetime.now())]
-            )
-            return True
-        except IntegrityError:
-            return False
-        finally:
-            transaction.commit_unless_managed()
+        with transaction.atomic():
+            try:
+                cursor.execute(
+                    self.INSERT_NONCE_QUERY,
+                    [user.id, nonce, nonce_count,
+                     connection.ops.value_to_db_datetime(datetime.now())]
+                )
+                return True
+            except IntegrityError:
+                return False
